@@ -10,47 +10,185 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 from sklearn.preprocessing import StandardScaler 
 
 
-def Sigmoid(z):
-    return 1 / (1 + np.exp(-z))
+# def Sigmoid(Z):
+#     return 1 / (1 + np.exp(-Z))
 
-def Loss(Y, Y_hat):
-    n = Y.shape[0]
-    eps = 1e-9
+# def BLoss(A, A_hat):
+#     n = A.shape[0]
+#     eps = 1e-9
 
-    if len(Y.shape) > 1: Y = Y.flatten()
-    if len(Y_hat.shape) > 1: Y_hat = Y_hat.flatten()
+#     if len(A.shape) > 1: A = A.flatten()
+#     if len(A_hat.shape) > 1: A_hat = A_hat.flatten()
     
-    loss = -1 / n * np.sum(Y * np.log(Y_hat + eps) + (1 - Y) * np.log(1 - Y_hat + eps))
+#     loss = -1 / n * np.sum(A * np.log(A_hat + eps) + (1 - A) * np.log(1 - A_hat + eps))
+#     return loss
+
+# def Loss(X, Y, Y_hat):
+#     n = Y.shape[0]
+#     eps = 1e-9
+
+#     if len(Y.shape) > 1: Y = Y.flatten()
+#     if len(Y_hat.shape) > 1: Y_hat = Y_hat.flatten()
+    
+#     loss = -1 / n * np.sum(Y * np.log(Y_hat + eps) + (1 - Y) * np.log(1 - Y_hat + eps))+ BLoss(X[:, 3] * X[:, 5] + X[:, 7] + X[:, 8] + X[:, 9] + X[:, 10] * X[:, 6] / 450.0, X[:, 4])
+#     return loss
+
+# def GD(X, Y, Y_hat):
+#     n = X.shape[0]
+  
+#     dW = 1 / n * np.dot(X.T, (Y_hat.reshape(-1, 1) - Y.reshape(-1, 1)))
+#     dc = 1 / n * np.sum(Y_hat - Y)
+#     return dW.flatten(), dc
+
+# def Train_LR(X, Y, lr=0.001, ep=10000):
+#     X = np.array(X, dtype=float)
+#     Y = np.array(Y, dtype=float).reshape(-1, 1)
+
+#     W = np.zeros((X.shape[1], 1))
+#     c = 0.0
+#     losses_history = []
+    
+#     for i in range(ep):
+#         Z = np.dot(X, W) + c
+#         Y_hat = Sigmoid(Z)
+#         loss = Loss(X, Y, Y_hat)
+#         if (i % (ep // 100) == 0) or (i == ep - 1):
+#              losses_history.append(loss)
+        
+#         dW, dc = GD(X, Y.flatten(), Y_hat.flatten())
+        
+#         W -= lr * dW.reshape(-1, 1) * np.log(1 + loss)
+#         c -= lr * dc * np.log(1 + loss)
+
+#     return W.flatten(), c, np.array(losses_history)
+
+# ===============================
+# Sigmoid
+# ===============================
+def Sigmoid(Z):
+    return 1 / (1 + np.exp(-Z))
+
+# ===============================
+# Logistic factor theo credit_score
+# ===============================
+def credit_factor_logistic(credit_score, scale=2.0):
+    """
+    credit_score: 300 → 900
+    scale: max multiplier
+    trả về factor mềm mại 0->scale
+    """
+    z = (credit_score - 600) / 50  # 600 midpoint, 50 độ dốc
+    factor = 1 / (1 + np.exp(-z))  # sigmoid 0->1
+    return factor * scale           # scale tới max 2.0
+
+# ===============================
+# Optimized Loss + Soft Penalty
+# ===============================
+def loss_fn(X, Y, Y_hat, lambda_penalty=0.5):
+    eps = 1e-9
+    Y = Y.flatten()
+    Y_hat_f = Y_hat.flatten()
+    
+    # -------------------------
+    # BCE
+    # -------------------------
+    bce = -np.mean(Y * np.log(Y_hat_f + eps) + (1 - Y) * np.log(1 - Y_hat_f + eps))
+
+    # -------------------------
+    # Soft penalties (feature-based)
+    # -------------------------
+    total_assets = X[:,3]
+    loan_amt = X[:,7]
+    income = X[:,5]
+    credit_score = X[:,8]
+
+    # Factor vay tối đa theo credit_score
+    factor = credit_factor_logistic(credit_score, scale=2.0)
+    max_loan = total_assets * factor
+
+    # Penalty 1: vay vượt max_loan
+    over_limit = np.maximum(0, loan_amt - max_loan)
+
+    # Penalty 2: Debt-to-Income ratio > 0.5
+    dti = loan_amt / (income + eps)
+    dti_penalty = np.maximum(0, dti - 0.5) * loan_amt  # càng vượt càng phạt
+
+    # Penalty 3: credit_score thấp
+    credit_penalty = ((700 - credit_score)/400).clip(0) * loan_amt
+
+    # Tổng penalty chỉ áp dụng khi model predict Accept
+    total_penalty = (over_limit + dti_penalty + credit_penalty) * Y_hat_f
+
+    loss = bce + lambda_penalty * np.mean(total_penalty)
     return loss
 
-def GD(X, Y, Y_hat):
+# ===============================
+# Gradient computation
+# ===============================
+def compute_gradients(X, Y, Y_hat, lambda_penalty=0.5):
     n = X.shape[0]
-  
-    dW = 1 / n * np.dot(X.T, (Y_hat.reshape(-1, 1) - Y.reshape(-1, 1)))
-    dc = 1 / n * np.sum(Y_hat - Y)
-    return dW.flatten(), dc
+    Y_hat_f = Y_hat.flatten()
 
-def Train_LR(X, Y, lr=0.001, ep=10000):
-    X = np.array(X, dtype=float)
-    Y = np.array(Y, dtype=float).reshape(-1, 1)
+    # -------------------------
+    # Gradient BCE
+    # -------------------------
+    dZ = (Y_hat_f - Y) / n
+    dW = np.dot(X.T, dZ.reshape(-1,1))
+    dc = np.sum(dZ)
 
-    W = np.zeros((X.shape[1], 1))
+    # -------------------------
+    # Gradient penalty
+    # -------------------------
+    total_assets = X[:,3]
+    loan_amt = X[:,7]
+    income = X[:,5]
+    credit_score = X[:,8]
+
+    factor = credit_factor_logistic(credit_score, scale=2.0)
+    max_loan = total_assets * factor
+    over_limit = np.maximum(0, loan_amt - max_loan)
+
+    dti = loan_amt / (income + 1e-9)
+    dti_penalty = np.maximum(0, dti - 0.5) * loan_amt
+
+    credit_penalty = ((700 - credit_score)/400).clip(0) * loan_amt
+
+    total_penalty = (over_limit + dti_penalty + credit_penalty) * Y_hat_f
+
+    dZ_penalty = (lambda_penalty / n) * total_penalty
+    dW += np.dot(X.T, dZ_penalty.reshape(-1,1))
+    dc += np.sum(dZ_penalty)
+
+    return dW, dc
+
+# ===============================
+# Training function
+# ===============================
+def Train_LR(X, Y, lr=0.001, ep=5000, lambda_penalty=0.5):
+    X = np.array(X, float)
+    Y = np.array(Y, float).reshape(-1,1)
+
+    n_samples, n_features = X.shape
+    W = np.zeros((n_features,1))
     c = 0.0
-    losses_history = []
-    
+    history = []
+
     for i in range(ep):
-        Z = np.dot(X, W) + c
+        Z = X @ W + c
         Y_hat = Sigmoid(Z)
-        
-        if (i % (ep // 100) == 0) or (i == ep - 1):
-             losses_history.append(Loss(Y, Y_hat))
-        
-        dW, dc = GD(X, Y.flatten(), Y_hat.flatten())
-        
-        W -= lr * dW.reshape(-1, 1) 
+
+        loss = loss_fn(X, Y, Y_hat, lambda_penalty)
+        if i % 100 == 0:
+            history.append(loss)
+
+        dW, dc = compute_gradients(X, Y.flatten(), Y_hat, lambda_penalty)
+
+        # update parameters
+        W -= lr * dW
         c -= lr * dc
 
-    return W.flatten(), c, np.array(losses_history)
+    return W.flatten(), c, np.array(history)
+
 
 def Hybrid_Predict_Proba(X_input, rf_model, W, c):
     X = np.array(X_input, dtype=float)
@@ -60,7 +198,7 @@ def Hybrid_Predict_Proba(X_input, rf_model, W, c):
 
     Y_hat_rf = rf_model.predict_proba(X)[:, 1]
 
-    Y_pred_proba = 0.6 * Y_hat_lr + 0.4 * Y_hat_rf
+    Y_pred_proba = 0.3 * Y_hat_lr + 0.7 * Y_hat_rf
 
     return Y_pred_proba
 
@@ -158,11 +296,11 @@ with st.sidebar:
             current_choice = "Có" if default_value_unscaled > 0.5 else "Không"
             input_data_raw[feature] = st.selectbox(label=label_vi, options=["Có", "Không"], index=["Có", "Không"].index(current_choice))
         else:
-            value_to_display = int(default_value_unscaled) if default_value_unscaled > 10000 or feature in ['cibil_score', 'loan_term'] else float(default_value_unscaled)
+            value_to_display = float(default_value_unscaled) if default_value_unscaled > 10000 or feature in ['cibil_score', 'loan_term'] else float(default_value_unscaled)
             input_data_raw[feature] = st.number_input(
                 label=label_vi,
                 value=value_to_display,
-                format="%d" if default_value_unscaled > 10000 or feature in ['cibil_score', 'loan_term'] else "%.2f"
+                format="%.2f" if default_value_unscaled > 10000 or feature in ['cibil_score', 'loan_term'] else "%.2f"
             )
 
     if st.button("Dự đoán hồ sơ", use_container_width=True, type="primary"):
