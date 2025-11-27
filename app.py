@@ -1,447 +1,353 @@
 import numpy as np
 import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
-import seaborn as sns
+import plotly.graph_objects as go
+import plotly.express as px
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from sklearn.preprocessing import StandardScaler 
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import confusion_matrix, accuracy_score
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import warnings
 
+warnings.filterwarnings('ignore')
 
-# def Sigmoid(Z):
-#     return 1 / (1 + np.exp(-Z))
+# ==========================================
+# 0. CẤU HÌNH HỆ THỐNG
+# ==========================================
+st.set_page_config(layout="wide", page_title="Risk AI V27 (Sigmoid Scaling)", page_icon="📈", initial_sidebar_state="expanded")
+EX_RATE = 26000.0 
+FEATURES = [
+    'no_of_dependents', 'education', 'self_employed', 'income_annum', 
+    'loan_amount', 'loan_term', 'cibil_score', 
+    'residential_assets_value', 'commercial_assets_value', 'luxury_assets_value', 'bank_asset_value'
+]
+FEATURE_VN = [
+    'Người phụ thuộc', 'Học vấn', 'Tự kinh doanh', 'Thu nhập', 
+    'Số tiền vay', 'Kỳ hạn', 'Điểm CIBIL', 
+    'BĐS Nhà', 'BĐS TMại', 'Tài sản Lux', 'Tiền mặt/Bank'
+]
 
-# def BLoss(A, A_hat):
-#     n = A.shape[0]
-#     eps = 1e-9
+if 'theme' not in st.session_state: st.session_state.theme = 'dark'
+is_dark = st.session_state.theme == 'dark'
 
-#     if len(A.shape) > 1: A = A.flatten()
-#     if len(A_hat.shape) > 1: A_hat = A_hat.flatten()
-    
-#     loss = -1 / n * np.sum(A * np.log(A_hat + eps) + (1 - A) * np.log(1 - A_hat + eps))
-#     return loss
+st.markdown(f"""
+<style>
+    .stApp {{ background-color: {'#0b0e11' if is_dark else '#f8fafc'}; color: {'#f0f2f6' if is_dark else '#333'}; }}
+    .kpi-card {{
+        background: {'#161b22' if is_dark else 'white'}; padding: 15px; border-radius: 10px;
+        border: 1px solid {'#30363d' if is_dark else '#ddd'};
+        border-left: 4px solid #3b82f6; box-shadow: 0 4px 10px rgba(0,0,0,0.2); margin-bottom: 10px;
+    }}
+    .kpi-val {{ font-size: 26px; font-weight: 800; margin: 5px 0; color: #fff; font-family: 'Courier New'; }}
+    .kpi-lbl {{ color: #8b949e; font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 1px; }}
+    div[data-testid="stNumberInput"] input {{ color: #f59e0b !important; font-weight: bold; }}
+</style>
+""", unsafe_allow_html=True)
 
-# def Loss(X, Y, Y_hat):
-#     n = Y.shape[0]
-#     eps = 1e-9
+def fmt(x): return f"{x:,.0f}"
 
-#     if len(Y.shape) > 1: Y = Y.flatten()
-#     if len(Y_hat.shape) > 1: Y_hat = Y_hat.flatten()
-    
-#     loss = -1 / n * np.sum(Y * np.log(Y_hat + eps) + (1 - Y) * np.log(1 - Y_hat + eps))+ BLoss(X[:, 3] * X[:, 5] + X[:, 7] + X[:, 8] + X[:, 9] + X[:, 10] * X[:, 6] / 450.0, X[:, 4])
-#     return loss
+# === HÀM SIGMOID QUYẾT ĐỊNH HỆ SỐ TÀI SẢN ===
+def get_asset_multiplier(cibil):
+    # Midpoint 660 để đạt 1.25x. Steepness 50 để curve mượt từ 300->900
+    return 0.5 + 1.5 / (1 + np.exp(-(cibil - 660) / 50))
 
-# def GD(X, Y, Y_hat):
-#     n = X.shape[0]
-  
-#     dW = 1 / n * np.dot(X.T, (Y_hat.reshape(-1, 1) - Y.reshape(-1, 1)))
-#     dc = 1 / n * np.sum(Y_hat - Y)
-#     return dW.flatten(), dc
-
-# def Train_LR(X, Y, lr=0.001, ep=10000):
-#     X = np.array(X, dtype=float)
-#     Y = np.array(Y, dtype=float).reshape(-1, 1)
-
-#     W = np.zeros((X.shape[1], 1))
-#     c = 0.0
-#     losses_history = []
-    
-#     for i in range(ep):
-#         Z = np.dot(X, W) + c
-#         Y_hat = Sigmoid(Z)
-#         loss = Loss(X, Y, Y_hat)
-#         if (i % (ep // 100) == 0) or (i == ep - 1):
-#              losses_history.append(loss)
-        
-#         dW, dc = GD(X, Y.flatten(), Y_hat.flatten())
-        
-#         W -= lr * dW.reshape(-1, 1) * np.log(1 + loss)
-#         c -= lr * dc * np.log(1 + loss)
-
-#     return W.flatten(), c, np.array(losses_history)
-
-# ===============================
-# Sigmoid
-# ===============================
-def Sigmoid(Z):
-    return 1 / (1 + np.exp(-Z))
-
-# ===============================
-# Logistic factor theo credit_score
-# ===============================
-def credit_factor_logistic(credit_score, scale=2.0):
-    """
-    credit_score: 300 → 900
-    scale: max multiplier
-    trả về factor mềm mại 0->scale
-    """
-    z = (credit_score - 600) / 50  # 600 midpoint, 50 độ dốc
-    factor = 1 / (1 + np.exp(-z))  # sigmoid 0->1
-    return factor * scale           # scale tới max 2.0
-
-# ===============================
-# Optimized Loss + Soft Penalty
-# ===============================
-def loss_fn(X, Y, Y_hat, lambda_penalty=0.5):
-    eps = 1e-9
-    Y = Y.flatten()
-    Y_hat_f = Y_hat.flatten()
-    
-    # -------------------------
-    # BCE
-    # -------------------------
-    bce = -np.mean(Y * np.log(Y_hat_f + eps) + (1 - Y) * np.log(1 - Y_hat_f + eps))
-
-    # -------------------------
-    # Soft penalties (feature-based)
-    # -------------------------
-    total_assets = X[:,3]
-    loan_amt = X[:,7]
-    income = X[:,5]
-    credit_score = X[:,8]
-
-    # Factor vay tối đa theo credit_score
-    factor = credit_factor_logistic(credit_score, scale=2.0)
-    max_loan = total_assets * factor
-
-    # Penalty 1: vay vượt max_loan
-    over_limit = np.maximum(0, loan_amt - max_loan)
-
-    # Penalty 2: Debt-to-Income ratio > 0.5
-    dti = loan_amt / (income + eps)
-    dti_penalty = np.maximum(0, dti - 0.5) * loan_amt  # càng vượt càng phạt
-
-    # Penalty 3: credit_score thấp
-    credit_penalty = ((700 - credit_score)/400).clip(0) * loan_amt
-
-    # Tổng penalty chỉ áp dụng khi model predict Accept
-    total_penalty = (over_limit + dti_penalty + credit_penalty) * Y_hat_f
-
-    loss = bce + lambda_penalty * np.mean(total_penalty)
-    return loss
-
-# ===============================
-# Gradient computation
-# ===============================
-def compute_gradients(X, Y, Y_hat, lambda_penalty=0.5):
-    n = X.shape[0]
-    Y_hat_f = Y_hat.flatten()
-
-    # -------------------------
-    # Gradient BCE
-    # -------------------------
-    dZ = (Y_hat_f - Y) / n
-    dW = np.dot(X.T, dZ.reshape(-1,1))
-    dc = np.sum(dZ)
-
-    # -------------------------
-    # Gradient penalty
-    # -------------------------
-    total_assets = X[:,3]
-    loan_amt = X[:,7]
-    income = X[:,5]
-    credit_score = X[:,8]
-
-    factor = credit_factor_logistic(credit_score, scale=2.0)
-    max_loan = total_assets * factor
-    over_limit = np.maximum(0, loan_amt - max_loan)
-
-    dti = loan_amt / (income + 1e-9)
-    dti_penalty = np.maximum(0, dti - 0.5) * loan_amt
-
-    credit_penalty = ((700 - credit_score)/400).clip(0) * loan_amt
-
-    total_penalty = (over_limit + dti_penalty + credit_penalty) * Y_hat_f
-
-    dZ_penalty = (lambda_penalty / n) * total_penalty
-    dW += np.dot(X.T, dZ_penalty.reshape(-1,1))
-    dc += np.sum(dZ_penalty)
-
-    return dW, dc
-
-# ===============================
-# Training function
-# ===============================
-def Train_LR(X, Y, lr=0.001, ep=5000, lambda_penalty=0.5):
-    X = np.array(X, float)
-    Y = np.array(Y, float).reshape(-1,1)
-
-    n_samples, n_features = X.shape
-    W = np.zeros((n_features,1))
-    c = 0.0
-    history = []
-
-    for i in range(ep):
-        Z = X @ W + c
-        Y_hat = Sigmoid(Z)
-
-        loss = loss_fn(X, Y, Y_hat, lambda_penalty)
-        if i % 100 == 0:
-            history.append(loss)
-
-        dW, dc = compute_gradients(X, Y.flatten(), Y_hat, lambda_penalty)
-
-        # update parameters
-        W -= lr * dW
-        c -= lr * dc
-
-    return W.flatten(), c, np.array(history)
-
-
-def Hybrid_Predict_Proba(X_input, rf_model, W, c):
-    X = np.array(X_input, dtype=float)
-
-    Z_lr = np.dot(X, W.reshape(-1, 1)) + c
-    Y_hat_lr = Sigmoid(Z_lr).flatten()
-
-    Y_hat_rf = rf_model.predict_proba(X)[:, 1]
-
-    Y_pred_proba = 0.3 * Y_hat_lr + 0.7 * Y_hat_rf
-
-    return Y_pred_proba
-
-def Final_Predict(Y_prob, threshold=0.5):
-
-    Y_class = np.where(Y_prob > threshold, 1, 0) 
-    return Y_class
-
-@st.cache_resource
-def get_trained_model_results():
+def calc_emi(p, r, n):
     try:
-        fl = pd.read_csv("./Loan - Loan.csv") 
-    except FileNotFoundError:
-        st.error("Lỗi: Không tìm thấy file Loan - Loan.csv. Vui lòng đảm bảo file nằm cùng thư mục.")
-        return None, None, None, None, None, None, None, None, None, None 
-        
-    fl['education'] = fl['education'].map({'Graduate': 1, 'Not Graduate': 0})
-    fl['self_employed'] = fl['self_employed'].map({'Yes': 1, 'No': 0})
-    fl['loan_status'] = fl['loan_status'].map({'Approved': 1, 'Rejected': 0})
+        rm = r/100.0
+        if rm <= 1e-9: return p/n
+        return (p * rm * (1+rm)**n)/((1+rm)**n - 1)
+    except: return 0
+
+def banking_limits(cibil, inc_yr_usd, asset_usd, term_mo):
+    # 1. Hạn mức theo Thu nhập (Unsecured Logic - V26)
+    cap_inc = (inc_yr_usd / 12.0 * 15.0) # Tối đa 15 lần lương (như đã fix ở V26)
     
-    FEATURE_NAMES = list(fl.columns[1:-1])
-    X_data = fl[FEATURE_NAMES].values.astype(float)
-    Y_data = fl['loan_status'].values.astype(int)
+    # 2. Hạn mức theo Tài sản (Sigmoid Logic - V27)
+    sigmoid_factor = get_asset_multiplier(cibil)
+    cap_ass = asset_usd * sigmoid_factor
+    
+    # Lấy cái lớn hơn (Nếu có thế chấp thì ưu tiên thế chấp, nếu không thì xét tín chấp)
+    base_limit = max(cap_inc, cap_ass)
+    
+    return base_limit, sigmoid_factor
 
-    scaler = StandardScaler()
-    X_data_scaled = scaler.fit_transform(X_data) 
+# ==========================================
+# 1. CLASS MANUAL LOGISTIC
+# ==========================================
+class HandMadeLogisticRegression:
+    def __init__(self, learning_rate=0.01, epochs=1000, lambda_reg=0.1):
+        self.lr = learning_rate; self.epochs = epochs; self.lambda_reg = lambda_reg
+        self.w = None; self.b = None; self.cost_history = []
 
-    X_train, _, Y_train, _ = train_test_split(
-        X_data_scaled, Y_data, test_size=0.4, random_state=11, stratify=Y_data
+    def sigmoid(self, z): return 1 / (1 + np.exp(-z)) 
+
+    def fit(self, X, y):
+        m, n = X.shape
+        self.w = np.zeros(n); self.b = 0; y = y.ravel()
+        for i in range(self.epochs):
+            z = np.dot(X, self.w) + self.b; a = self.sigmoid(z)
+            epsilon = 1e-15
+            loss = -np.mean(y * np.log(a + epsilon) + (1 - y) * np.log(1 - a + epsilon)) + (self.lambda_reg / (2 * m)) * np.sum(self.w ** 2)
+            self.cost_history.append(loss)
+            dw = (1 / m) * np.dot(X.T, (a - y)) + (self.lambda_reg / m) * self.w
+            db = (1 / m) * np.sum(a - y)
+            self.w -= self.lr * dw; self.b -= self.lr * db
+
+    def predict_proba(self, X): return self.sigmoid(np.dot(X, self.w) + self.b)
+    def get_feature_importance(self): return np.abs(self.w)
+
+# ==========================================
+# 2. TRAINING ENGINE (SIGMOID LOGIC INJECTED)
+# ==========================================
+@st.cache_resource
+def train_sigmoid_core():
+    np.random.seed(42)
+    dfs = []
+    
+    # --- A. NHÓM THẾ CHẤP (ÁP DỤNG SIGMOID) ---
+    def generate_secured_sigmoid(size):
+        df = pd.DataFrame()
+        df['income_annum'] = np.random.uniform(5000, 50000, size) * EX_RATE
+        
+        # Tạo tài sản đa dạng
+        df['residential_assets_value'] = np.random.uniform(10000, 500000, size) * EX_RATE
+        df['commercial_assets_value'] = np.random.uniform(0, 100000, size) * EX_RATE
+        df['luxury_assets_value'] = np.random.uniform(0, 50000, size) * EX_RATE
+        df['bank_asset_value'] = np.random.uniform(0, 50000, size) * EX_RATE
+        
+        df['cibil_score'] = np.random.randint(300, 900, size)
+        df['loan_term'] = np.random.randint(24, 180, size) / 12
+        df['no_of_dependents'] = np.random.randint(0, 4, size)
+        df['education'] = np.random.randint(0, 2, size)
+        df['self_employed'] = np.random.randint(0, 2, size)
+        
+        total_assets = df['residential_assets_value'] + df['commercial_assets_value'] + df['luxury_assets_value'] + df['bank_asset_value']
+        
+        # === ÁP DỤNG CÔNG THỨC SIGMOID VÀO VIỆC SINH DỮ LIỆU ===
+        # Tính hệ số nhân dựa trên CIBIL từng người
+        multipliers = 0.5 + 1.5 / (1 + np.exp(-(df['cibil_score'] - 660) / 50))
+        
+        # Hạn mức tối đa cho phép
+        max_loan_limit = total_assets * multipliers
+        
+        # Sinh khoản vay ngẫu nhiên quanh ngưỡng này
+        # Nếu vay <= max_limit * 0.9 -> Duyệt (Safe)
+        # Nếu vay > max_limit * 1.1 -> Rớt (Risky)
+        # Vùng giữa -> Hên xui
+        
+        df['loan_amount'] = max_loan_limit * np.random.uniform(0.5, 1.5, size)
+        
+        # Logic Labeling
+        ratio = df['loan_amount'] / max_loan_limit
+        df['loan_status'] = (ratio < 1.0).astype(int)
+        
+        return df[FEATURES + ['loan_status']]
+
+    # --- B. NHÓM TÍN CHẤP (GIỮ LOGIC V26 CHO BẠN) ---
+    def generate_unsecured_v26(size):
+        df = pd.DataFrame()
+        df['income_annum'] = np.random.uniform(20000000, 100000000, size) * 12 
+        df['residential_assets_value'] = 0; df['commercial_assets_value'] = 0
+        df['luxury_assets_value'] = 0; df['bank_asset_value'] = 0 
+        df['cibil_score'] = np.random.randint(600, 900, size)
+        df['loan_term'] = np.random.randint(12, 60, size) / 12
+        df['no_of_dependents'] = np.random.randint(0, 3, size)
+        df['education'] = np.random.randint(0, 2, size); df['self_employed'] = np.random.randint(0, 2, size)
+        
+        monthly_income = df['income_annum'] / 12
+        df['loan_amount'] = monthly_income * np.random.uniform(3.0, 12.0, size)
+        
+        rate = 0.12 / 12
+        term_mo = df['loan_term'] * 12
+        emi = (df['loan_amount'] * rate * (1+rate)**term_mo) / ((1+rate)**term_mo - 1)
+        dti = emi / monthly_income
+        
+        score = (1 - np.clip(dti, 0, 1)) * 0.6 + ((df['cibil_score']-300)/600) * 0.4
+        df['loan_status'] = (score > 0.50).astype(int)
+        return df[FEATURES + ['loan_status']]
+
+    dfs.append(generate_secured_sigmoid(6000)) # 6k mẫu học Sigmoid
+    dfs.append(generate_unsecured_v26(4000))   # 4k mẫu học Tín chấp
+
+    try:
+        r = pd.read_csv("Loan.csv"); r.columns = r.columns.str.strip()
+        r['education'] = r['education'].apply(lambda x: 1 if 'Grad' in str(x) else 0)
+        r['self_employed'] = r['self_employed'].apply(lambda x: 1 if 'Yes' in str(x) else 0)
+        r['loan_status'] = r['loan_status'].apply(lambda x: 1 if 'App' in str(x) else 0)
+        dfs.append(r[FEATURES + ['loan_status']])
+    except: pass
+
+    FULL = pd.concat(dfs, ignore_index=True).fillna(0)
+    
+    X = FULL[FEATURES].values; y = FULL['loan_status'].values.reshape(-1,1)
+    scl = StandardScaler(); X_s = scl.fit_transform(X)
+    X_train, X_test, y_train, y_test = train_test_split(X_s, y, test_size=0.2, random_state=42)
+
+    # --- TRAIN 4 MODELS ---
+    # Neural Net
+    model_nn = nn.Sequential(
+        nn.Linear(11, 64), nn.SiLU(), nn.Dropout(0.2),
+        nn.Linear(64, 32), nn.SiLU(), 
+        nn.Linear(32, 1), nn.Sigmoid()
     )
+    opt = optim.AdamW(model_nn.parameters(), lr=0.005)
+    for _ in range(250):
+        opt.zero_grad(); p = model_nn(torch.tensor(X_train, dtype=torch.float32))
+        loss = nn.BCELoss()(p, torch.tensor(y_train, dtype=torch.float32)); loss.backward(); opt.step()
 
-    rf_uncalibrated = RandomForestClassifier(n_estimators=1000, random_state=11, n_jobs=-1)
-    rf_model = CalibratedClassifierCV(rf_uncalibrated, method="sigmoid", cv=5)
-    rf_model.fit(X_train, Y_train)
+    # Random Forest (Depth vừa phải để học curve sigmoid mà không overfit noise)
+    model_rf = RandomForestClassifier(n_estimators=300, max_depth=10, min_samples_leaf=8, random_state=42)
+    model_rf.fit(X_train, y_train.ravel())
 
-    W_lr, c_lr, losses_history = Train_LR(X_data_scaled, Y_data, ep=10000)
- 
-    Y_prob_full = Hybrid_Predict_Proba(X_data_scaled, rf_model, W_lr, c_lr)
-    Y_pred_full = Final_Predict(Y_prob_full)
-    
-    return FEATURE_NAMES, X_data_scaled, Y_data, W_lr, c_lr, losses_history, Y_pred_full, Y_prob_full, rf_model, scaler
+    # G-Boosting
+    model_gb = GradientBoostingClassifier(n_estimators=300, learning_rate=0.1, max_depth=5, subsample=0.8, random_state=42)
+    model_gb.fit(X_train, y_train.ravel())
 
-FEATURE_NAMES, x, y, w, b, losses, y_pred, y_prob, rf_model, scaler = get_trained_model_results()
+    # Manual Logic
+    model_manual = HandMadeLogisticRegression(learning_rate=0.05, epochs=2000, lambda_reg=0.2)
+    model_manual.fit(X_train, y_train)
 
-if FEATURE_NAMES is None:
-    st.stop()
+    # Feature Importance
+    imp_rf = model_rf.feature_importances_
+    imp_gb = model_gb.feature_importances_
+    imp_man = model_manual.get_feature_importance(); imp_man /= np.sum(imp_man)
+    final_importance = (imp_rf + imp_gb + imp_man) / 3
+        
+    return scl, model_nn, model_rf, model_gb, model_manual, len(FULL), X_test, y_test, final_importance
 
-FEATURE_VIETMAP = {
-    "no_of_dependents": "Số người phụ thuộc", "education": "Trình độ học vấn", 
-    "self_employed": "Tự kinh doanh", "income_annum": "Thu nhập hằng năm", 
-    "loan_amount": "Số tiền vay", "loan_term": "Thời hạn vay", 
-    "cibil_score": "Điểm tín dụng (CIBIL)", "residential_assets_value": "Giá trị tài sản nhà ở", 
-    "commercial_assets_value": "Giá trị tài sản kinh doanh", 
-    "luxury_assets_value": "Giá trị tài sản cao cấp", "bank_asset_value": "Tài sản tại ngân hàng"
-}
+SCALER, NET, RF, GB, MAN, DATA_LEN, X_TE, Y_TE, F_IMP = train_sigmoid_core()
 
-
-def predict_labels(X_input_raw, W, c, rf_model_used, scaler_used):
-    """Sử dụng mô hình hybrid để dự đoán cho điểm dữ liệu mới."""
-
-    X_scaled_new = scaler_used.transform(X_input_raw) 
-    
-    P = Hybrid_Predict_Proba(X_scaled_new, rf_model_used, W, c)
-    return Final_Predict(P), P
-
-st.set_page_config(layout="wide", page_title="Dashboard Tín Dụng", page_icon="🏦")
-
-
+# ==========================================
+# 3. UI & CALCULATION
+# ==========================================
 with st.sidebar:
-    st.title("🏦 Hệ Thống Duyệt Hồ Sơ Vay")
-    st.markdown("Nhóm 2 - Giải tích 1")
-
-    st.header("Tham số mô hình")
-    with st.expander("Xem trọng số và bias"):
-        st.metric(label="Bias (c)", value=f"{b:.4f}")
-        for feature, weight in zip(FEATURE_NAMES, w):
-            st.markdown(f"**{FEATURE_VIETMAP[feature]}**: {weight:.4f}")
-
-    st.header("Nhập hồ sơ cần kiểm tra")
-    input_data_raw = {}
- 
-    X_data_unscaled = scaler.inverse_transform(x) 
-    mean_x_unscaled = np.mean(X_data_unscaled, axis=0)
-
-    for i, feature in enumerate(FEATURE_NAMES):
-        label_vi = FEATURE_VIETMAP[feature]
-        default_value_unscaled = mean_x_unscaled[i]
-
-        if feature == "no_of_dependents":
-            input_data_raw[feature] = st.number_input(label=label_vi, min_value=0, step=1, value=int(round(default_value_unscaled)))
-        elif feature == "education":
-            current_choice = "Tốt nghiệp" if default_value_unscaled > 0.5 else "Chưa tốt nghiệp"
-            input_data_raw[feature] = st.selectbox(label=label_vi, options=["Tốt nghiệp", "Chưa tốt nghiệp"], index=["Tốt nghiệp", "Chưa tốt nghiệp"].index(current_choice))
-        elif feature == "self_employed":
-            current_choice = "Có" if default_value_unscaled > 0.5 else "Không"
-            input_data_raw[feature] = st.selectbox(label=label_vi, options=["Có", "Không"], index=["Có", "Không"].index(current_choice))
-        else:
-            value_to_display = float(default_value_unscaled) if default_value_unscaled > 10000 or feature in ['cibil_score', 'loan_term'] else float(default_value_unscaled)
-            input_data_raw[feature] = st.number_input(
-                label=label_vi,
-                value=value_to_display,
-                format="%.2f" if default_value_unscaled > 10000 or feature in ['cibil_score', 'loan_term'] else "%.2f"
-            )
-
-    if st.button("Dự đoán hồ sơ", use_container_width=True, type="primary"):
-
-        final_input_values_raw = []
-        for name in FEATURE_NAMES:
-            if name == 'education':
-                final_input_values_raw.append(1.0 if input_data_raw[name] == "Tốt nghiệp" else 0.0)
-            elif name == 'self_employed':
-                final_input_values_raw.append(1.0 if input_data_raw[name] == "Có" else 0.0)
-            else:
-                final_input_values_raw.append(float(input_data_raw[name]))
-        
-        new_point_raw = np.array(final_input_values_raw).reshape(1, -1)
-
-        prediction, prob = predict_labels(new_point_raw, w, b, rf_model, scaler)
-
-        if prediction[0] == 1:
-            st.success(f"✅ Kết quả: **DUYỆT HỒ SƠ** — Xác suất: {prob[0]:.2%}")
-            st.balloons()
-        else:
-            st.error(f"❌ Kết quả: **TỪ CHỐI** — Xác suất bị từ chối: {(1 - prob[0]):.2%}")
-
-
-tab1, tab2, tab3 = st.tabs(["Quá trình huấn luyện", "Đánh giá mô hình", "Trực quan hóa"])
-
-EP_TRAIN = 10000 
-loss_divisor = 100 
-loss_indices = np.arange(len(losses)) * (EP_TRAIN // loss_divisor) 
-
-
-with tab1:
-    st.header("Diễn biến Loss")
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("Dữ liệu đầu vào mô hình")
-        df_scaled = pd.DataFrame(x, columns=[FEATURE_VIETMAP[f] for f in FEATURE_NAMES])
-        df_scaled['Trạng thái vay (y)'] = y
-        st.dataframe(df_scaled.head())
-
-    with col2:
-        st.subheader("Loss giảm theo thời gian (Logistic Regression)")
-        fig, ax = plt.subplots()
-        ax.plot(loss_indices, losses, color='blue')
-        ax.set_title("Loss giảm theo Epoch ")
-        ax.set_xlabel("Epoch (x100 iterations)")
-        ax.set_ylabel("Loss (Binary Cross-Entropy)")
-        st.pyplot(fig)
-
-with tab2:
-    st.header("Hiệu năng mô hình")
-    col1, col2 = st.columns([1, 1.4])
+    st.header("📝 THẨM ĐỊNH (SIGMOID)")
+    st.info(f"Curve: 300(0.5x) -> 660(1.25x) -> 900(2.0x)")
+    i_cibil = st.slider("CIBIL", 300, 900, 750)
+    i_inc_mo = st.number_input("Thu nhập Tháng (VNĐ)", 0.0, step=1e7, value=50000000.0, format="%.0f")
     
-    if len(y_pred) > 0:
-        with col1:
-            acc = accuracy_score(y, y_pred)
-            st.metric("Độ chính xác", f"{acc:.2%}")
+    with st.expander("Tài sản (Để trống = 0)"):
+        ra = st.number_input("BĐS Nhà", 0.0, step=1e9, format="%.0f", value=0.0)
+        ca = st.number_input("Kinh doanh", 0.0, step=1e9, format="%.0f", value=0.0)
+        la = st.number_input("Xe/Lux", 0.0, step=1e8, format="%.0f", value=0.0)
+        ba = st.number_input("Bank/CK", 0.0, step=1e8, format="%.0f", value=0.0)
+    i_tot = ra+ca+la+ba
+    
+    st.markdown("---")
+    i_loan = st.number_input("Số Tiền Vay (VNĐ)", 0.0, step=1e8, value=200000000.0, format="%.0f")
+    i_term = st.number_input("Thời hạn (Tháng)", 1, 480, 36)
+    i_rate = st.number_input("Lãi suất (%)", 0.0, 20.0, 10.0)
+    btn = st.button("KÍCH HOẠT HỆ THỐNG", type="primary", use_container_width=True)
 
-            report = classification_report(
-                y, y_pred,
-                target_names=['Từ chối', 'Duyệt'],
-                output_dict=True
-            )
-            st.subheader("Báo cáo phân loại")
-            st.dataframe(pd.DataFrame(report).transpose())
+# LOGIC CALCULATOR
+if i_loan<=0: i_loan=1
+inc_yr = i_inc_mo * 12
+lim_usd, sig_factor = banking_limits(i_cibil, (inc_yr/EX_RATE), (i_tot/EX_RATE), i_term)
+limit_vnd = lim_usd * EX_RATE
+emi = calc_emi(i_loan, i_rate, i_term)
+dti = emi / (i_inc_mo + 1)
 
-        with col2:
-            st.subheader("Ma trận Nhầm lẫn")
-            cm = confusion_matrix(y, y_pred)
-            fig_cm, ax_cm = plt.subplots()
-            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                        xticklabels=['Dự đoán: Từ chối', 'Dự đoán: Duyệt'],
-                        yticklabels=['Thực tế: Từ chối', 'Thực tế: Duyệt'],
-                        ax=ax_cm)
-            ax_cm.set_title('Confusion Matrix')
-            st.pyplot(fig_cm)
-    else:
-        st.warning("Không đủ dữ liệu để đánh giá hiệu năng.")
+# PREDICT
+v_raw = [[2, 1, 0, inc_yr/EX_RATE, i_loan/EX_RATE, i_term/12.0, i_cibil, ra/EX_RATE, ca/EX_RATE, la/EX_RATE, ba/EX_RATE]]
+v = SCALER.transform(v_raw)
 
+with torch.no_grad(): score_nn = NET(torch.tensor(v, dtype=torch.float32)).item()
+score_rf = RF.predict_proba(v)[0, 1]
+score_gb = GB.predict_proba(v)[0, 1]
+score_man = MAN.predict_proba(v)[0]
 
-with tab3:
-    st.header("Trực quan hóa 2 chiều")
-    st.warning("Do dữ liệu có 11 chiều, chỉ có thể vẽ 'lát cắt' 2D bằng cách chọn 2 đặc trưng.", icon="⚠️")
+final_score = (score_nn + score_rf + score_gb + score_man) / 4
 
-    col1, col2 = st.columns(2)
+is_ok=True; reasons=[]
+# Logic duyệt
+if i_loan > limit_vnd*1.1: is_ok=False; final_score*=0.4; reasons.append(f"Vượt hạn mức ({fmt(limit_vnd)})")
+if dti > 0.65: is_ok=False; final_score*=0.5; reasons.append(f"DTI quá cao ({dti*100:.1f}%)")
+if final_score < 0.5: is_ok=False
 
-    with col1:
-        st.subheader("Độ quan trọng của đặc trưng (LR Weights)")
-        importance = pd.DataFrame({
-            "Đặc trưng": [FEATURE_VIETMAP[f] for f in FEATURE_NAMES],
-            "Độ quan trọng": np.abs(w)
-        }).sort_values("Độ quan trọng", ascending=False)
+col = "#238636" if is_ok else "#da3633"
+txt = "DUYỆT" if is_ok else "TỪ CHỐI"
 
-        fig_imp, ax_imp = plt.subplots(figsize=(10, 6))
-        sns.barplot(x="Độ quan trọng", y="Đặc trưng", data=importance, palette="viridis", ax=ax_imp)
-        ax_imp.set_title("Trọng số (W) tuyệt đối của Logistic Regression")
-        st.pyplot(fig_imp)
+# ==========================================
+# 4. DASHBOARD
+# ==========================================
+if btn and is_ok:
+    st.balloons()
+st.markdown(f"<h1 style='text-align:center;color:{col}'>{txt} ({final_score*100:.1f}%)</h1>", unsafe_allow_html=True)
 
-    with col2:
-        st.subheader("Chọn hai đặc trưng để vẽ ranh giới")
+m1,m2,m3,m4 = st.columns(4)
+def kpi(c,l,v,s,co): c.markdown(f"<div class='kpi-card' style='border-left-color:{co}'><div class='kpi-lbl'>{l}</div><div class='kpi-val' style='color:{'#fff' if is_dark else '#333'}'>{v}</div><small style='color:#aaa'>{s}</small></div>", unsafe_allow_html=True)
+
+kpi(m1, "SỐ TIỀN", fmt(i_loan), "VNĐ", "#3b82f6")
+kpi(m2, "LOẠI HÌNH", "TÍN CHẤP" if i_tot==0 else "THẾ CHẤP", f"Hệ số CIBIL: x{sig_factor:.2f}", "#a371f7")
+kpi(m3, "EMI/THÁNG", fmt(emi), f"DTI: {dti*100:.1f}%", col)
+kpi(m4, "AI TRUST", f"{final_score*100:.1f}", "Sigmoid V27", col)
+
+st.write("")
+t1, t2 = st.tabs(["📉 BIỂU ĐỒ SIGMOID & FEATURE", "⚙️ CHI TIẾT MODEL"])
+
+with t1:
+    c_left, c_right = st.columns(2)
+    with c_left:
+        # VẼ CURVE SIGMOID ĐỂ USER THẤY TRỰC QUAN
+        x_vals = np.linspace(300, 900, 100)
+        y_vals = get_asset_multiplier(x_vals)
         
+        fig_sig = go.Figure()
+        fig_sig.add_trace(go.Scatter(x=x_vals, y=y_vals, mode='lines', name='Multiplier Curve', line=dict(color='#3b82f6', width=3)))
+        # Điểm hiện tại của User
+        fig_sig.add_trace(go.Scatter(x=[i_cibil], y=[sig_factor], mode='markers', name='You are here', marker=dict(color='red', size=12)))
+        
+        fig_sig.update_layout(title="Hệ số nhân Tài sản theo CIBIL (Sigmoid)", xaxis_title="CIBIL Score", yaxis_title="Multiplier (x lần)", template="plotly_dark")
+        st.plotly_chart(fig_sig, use_container_width=True)
+        st.caption("Công thức: 0.5 + 1.5 / (1 + exp(-(CIBIL - 660)/50))")
+        
+    with c_right:
+        fi_df = pd.DataFrame({'Feature': FEATURE_VN, 'Importance': F_IMP})
+        fi_df = fi_df.sort_values(by='Importance', ascending=True)
+        fig_imp = px.bar(fi_df, x='Importance', y='Feature', orientation='h', 
+                        title="Yếu tố quan trọng", color='Importance', color_continuous_scale='Blues')
+        st.plotly_chart(fig_imp, use_container_width=True)
 
-        format_func_vi = lambda f: FEATURE_VIETMAP[f]
+with t2:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("1. Neural Net", f"{score_nn*100:.1f}%")
+    c2.metric("2. Random Forest", f"{score_rf*100:.1f}%")
+    c3.metric("3. G-Boosting", f"{score_gb*100:.1f}%")
+    c4.metric("4. Manual Code", f"{score_man*100:.1f}%")
+    
+    X_te_torch = torch.tensor(X_TE, dtype=torch.float32)
+    with torch.no_grad(): prob_nn = NET(X_te_torch).numpy().flatten()
+    prob_rf = RF.predict_proba(X_TE)[:, 1]
+    prob_gb = GB.predict_proba(X_TE)[:, 1]
+    prob_man = MAN.predict_proba(X_TE)
+    
+    prob_final = (prob_nn + prob_rf + prob_gb + prob_man) / 4
+    pred_final = (prob_final > 0.5).astype(int)
+    cm = confusion_matrix(Y_TE, pred_final)
+    acc = accuracy_score(Y_TE, pred_final)
 
-        safe_index_cibil = FEATURE_NAMES.index('cibil_score') if 'cibil_score' in FEATURE_NAMES else 0
-        safe_index_income = FEATURE_NAMES.index('income_annum') if 'income_annum' in FEATURE_NAMES else 1
+    k_acc, k_cm = st.columns(2)
+    with k_acc:
+        st.metric("Test Accuracy", f"{acc*100:.2f}%")
+    with k_cm:
+        fig_cm = px.imshow(cm, text_auto=True, color_continuous_scale='Mint', 
+                           x=['Từ chối','Đồng ý'], y=['Từ chối','Đồng ý'], title="Ma trận nhầm lẫn")
+        st.plotly_chart(fig_cm, use_container_width=True)
 
-        feat_x = st.selectbox("Trục X ", FEATURE_NAMES, index=safe_index_cibil, format_func=format_func_vi)
-        feat_y = st.selectbox("Trục Y", FEATURE_NAMES, index=safe_index_income, format_func=format_func_vi)
-
-        if feat_x == feat_y:
-            st.error("Hai đặc trưng phải khác nhau.")
+if btn:
+    @st.dialog("KẾT LUẬN")
+    def show():
+        st.header(txt)
+        if is_ok:
+            st.success("Duyệt thành công.")
+            if i_tot > 0:
+                st.write(f"Hệ số thế chấp CIBIL của bạn là: **x{sig_factor:.2f}**")
         else:
-            ix = FEATURE_NAMES.index(feat_x)
-            iy = FEATURE_NAMES.index(feat_y)
-
-            mean_values_scaled = np.mean(x, axis=0)
-            grid = np.ones((100*100, len(FEATURE_NAMES))) * mean_values_scaled
-
-            xr = np.linspace(x[:, ix].min(), x[:, ix].max(), 100)
-            yr = np.linspace(x[:, iy].min(), x[:, iy].max(), 100)
-            xx, yy = np.meshgrid(xr, yr)
-
-            grid[:, ix] = xx.ravel()
-            grid[:, iy] = yy.ravel()
-
-            y_grid_prob = Hybrid_Predict_Proba(grid, rf_model, w, b)
-            Z = Final_Predict(y_grid_prob)
-            Z = Z.reshape(xx.shape)
-
-            fig2, ax2 = plt.subplots(figsize=(10, 8))
-            ax2.contourf(xx, yy, Z, alpha=0.25, cmap=plt.cm.coolwarm)
-
-            sns.scatterplot(
-                x=x[:, ix], y=x[:, iy], hue=y,
-                palette=['#FF5733', '#1F77FF'], 
-                s=110, ax=ax2, style=y,
-                legend='full'
-            )
-            ax2.set_xlabel(f"{FEATURE_VIETMAP[feat_x]} (Chuẩn hóa)")
-            ax2.set_ylabel(f"{FEATURE_VIETMAP[feat_y]} (Chuẩn hóa)")
-
-            st.pyplot(fig2)
+            st.error("Từ chối.")
+            for m in reasons: st.write(f"- {m}")
+        st.divider()
+        st.write(f"Điểm tin cậy: **{final_score*100:.1f}**")
+    show()
