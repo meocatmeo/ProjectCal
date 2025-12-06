@@ -690,6 +690,6 @@ if btn_run:
             st.error("Application Declined.")
             [st.write(f"❌ {m}") for m in warnings_lst]
         st.divider()
-        st.caption(f"System ID: MPK - MeoBeoSama | Score: {final_score * 100:.1f}%")
+        st.caption(f"Authors: MPK - MeoBeoSama - MDuy | Score: {final_score * 100:.1f}%")
 
     show_dialog()
