@@ -140,9 +140,9 @@ class ManualLogisticRegression:
         return 1 / (1 + np.exp(-z))
 
     def fit(self, X, y):
-        """ n is the number of feature,
-            each feature have one weight to that n feature->n weight
-            m is the number of data sample"""
+        # n is the number of feature,
+        #   each feature have one weight to that n feature->n weight
+        #   m is the number of data sample
         m, n = X.shape
         self.w = np.zeros(n)
         self.b = 0
