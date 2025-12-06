@@ -85,11 +85,9 @@ def format_currency(val):
 # Logic: Higher scores get a higher asset multiplier (up to 2.0x)
 
 def calculate_asset_multiplier(score):
-    """
-    Applies Sigmoid function to scale asset value based on credit score.
-    Logic: 300->0.5x (Risky), 660->1.25x (Average), 900->2.0x (Prime).
-    With x is the value of the asset - 660 is the average number of industry-standard
-    """
+    # Applies Sigmoid function to scale asset value based on credit score.
+    # Logic: 300->0.5x (Risky), 660->1.25x (Average), 900->2.0x (Prime).
+    # With x is the value of the asset - 660 is the average number of industry-standard
     return 0.5 + 1.5 / (1 + np.exp(-(score - 660) / 50))
 
 
@@ -224,8 +222,8 @@ def train_models():
             total_assets = (
                 df["res_asset"] + df["com_asset"] + df["lux_asset"] + df["bank_asset"]
             )
-            """Apply Sigmoid Logic to calculate the risk (if risk is high: the limit=0.5*total_assets, if risk is average, the limit=1.25*total_assets, 
-             if risk is low: the limit=1.5 total_assets)"""
+            # Apply Sigmoid Logic to calculate the risk (if risk is high: the limit = 0.5 * total_assets, if risk is average, the limit = 1.25 * total_assets, 
+            # if risk is low: the limit = 1.5 * total_assets)
             # Logic: Loan Approved if Amount <= Adjusted Asset Limit
             
             mult = 0.5 + 1.5 / (1 + np.exp(-(df["cibil"] - 660) / 50))
