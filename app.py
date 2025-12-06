@@ -524,6 +524,7 @@ if dti_val > 0.65:
 
 if final_score < 0.5:
     is_approved = False
+    warnings_lst.append(f"Low Trust Score ({final_score * 100:.1f}%)")
 
 color = "#238636" if is_approved else "#da3633"
 status_txt = "APPROVED" if is_approved else "REJECTED"
@@ -688,7 +689,8 @@ if btn_run:
             st.write(f"**Loan Type:** {loan_type}")
         else:
             st.error("Application Declined.")
-            [st.write(f"❌ {m}") for m in warnings_lst]
+            for m in warnings_lst:
+                st.write(f"❌ {m}")
         st.divider()
         st.caption(f"Authors: MPK - MeoBeoSama - MDuy | Score: {final_score * 100:.1f}%")
 
